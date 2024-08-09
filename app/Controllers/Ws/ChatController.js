@@ -1,39 +1,46 @@
 'use strict'
 
 const Chat = use('App/Models/Chat')
+const Message = use('App/Models/Message')
+const File = use('App/Models/File')
 
 class ChatController {
-  async index ({ response }) {
-    const chats = await Chat.query().with('participants').fetch()
-    return response.json(chats)
+  constructor ({ socket, request }) {
+    this.socket = socket
+    this.request = request
   }
 
-  async store ({ request, response }) {
-    const { chat_type, name } = request.all()
-    const chat = await Chat.create({ chat_type, name })
-    return response.status(201).json(chat)
-  }
+  // Escuchar mensajes enviados por un usuario
+  async onMessage (data) {
+    try {
+      // Crear y guardar el mensaje en la base de datos
+      const message = await Message.create({
+        sender_id: data.sender_id,
+        receiver_id: data.receiver_id,
+        chat_id: data.chat_id,
+        content: data.content,
+        content_type: data.content_type,
+        status: 'sent',
+        sent_at: new Date()
+      });
 
-  async show ({ params, response }) {
-    const chat = await Chat.findOrFail(params.id)
-    await chat.load('participants')
-    return response.json(chat)
-  }
+      // Si el mensaje incluye archivos, guardar cada archivo
+      if (data.files && data.files.length > 0) {
+        await Promise.all(data.files.map(async file => {
+          await File.create({
+            message_id: message.id,
+            file_type: file.file_type,
+            url: file.url
+          });
+        }));
+      }
 
-  async update ({ params, request, response }) {
-    const chat = await Chat.findOrFail(params.id)
-    const { chat_type, name } = request.all()
-    chat.merge({ chat_type, name })
-    await chat.save()
-    return response.json(chat)
-  }
-
-  async destroy ({ params, response }) {
-    const chat = await Chat.findOrFail(params.id)
-    await chat.delete()
-    return response.status(204).json(null)
+      // Emitir el mensaje a todos los usuarios conectados en el chat
+      this.socket.broadcastToAll('message', message)
+    } catch (err) {
+      console.log('Error al enviar el mensaje:', err)
+    }
   }
 }
 
 module.exports = ChatController
-
